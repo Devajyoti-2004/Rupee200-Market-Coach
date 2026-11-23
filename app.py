@@ -1,584 +1,209 @@
-import streamlit as st
+import os
+from datetime import datetime
+from pathlib import Path
+from zoneinfo import ZoneInfo
+
 import pandas as pd
 import plotly.graph_objects as go
-
-from datetime import datetime
-from zoneinfo import ZoneInfo
-from pathlib import Path
+import streamlit as st
 
 from analyzer import (
-    analyse_symbol,
-    get_candidate_symbols,
-    market_session,
-    opening_check,
-    simple_backtest,
-    rupee,
-    get_history,
-    add_indicators
+    add_indicators, analyse_symbol, exit_monitor, get_candidate_symbols,
+    get_history, get_market_overview, market_session, opening_check,
+    premarket_summary, rupee, simple_backtest
 )
 
-# ---------------------------------
-# APP CONFIGURATION
-# ---------------------------------
-
-st.set_page_config(
-    page_title="₹200 Market Coach",
-    page_icon="📈",
-    layout="wide"
-)
-
-st.title("📈 ₹200 Market Coach")
-st.caption(
-    "NSE Cash Market | Beginner Friendly | AI-style Market Analysis"
-)
-
+st.set_page_config(page_title="₹200 Market Coach V3", page_icon="📈", layout="wide")
 TZ = ZoneInfo("Asia/Kolkata")
 LEDGER = Path("paper_trades.csv")
-
-# ---------------------------------
-# SIDEBAR
-# ---------------------------------
+st.title("📈 ₹200 Market Coach — V3")
+st.caption("NSE cash-equity decision support • ₹200 budget cap • Paper-trading first")
 
 with st.sidebar:
-
-    st.header("Your Investment Settings")
-
-    budget = st.number_input(
-        "Maximum Investment (₹)",
-        min_value=1,
-        max_value=200,
-        value=200,
-        step=10
-    )
-
-    risk_pct = st.slider(
-        "Illustrative Stop Distance (%)",
-        1,
-        5,
-        2
-    )
-
-    default_symbols = get_candidate_symbols()
-
-    symbols_text = st.text_area(
-        "NSE Watchlist",
-        "\n".join(default_symbols)
-    )
-
-    symbols = get_candidate_symbols(
-        symbols_text.splitlines(),
-        limit=30
-    )
-
-    scan_button = st.button(
-        "🔎 Scan Stock Market",
-        type="primary",
-        use_container_width=True
-    )
-
-    opening_button = st.button(
-        "⏱ Opening Confirmation",
-        use_container_width=True
-    )
-
-# ---------------------------------
-# MARKET STATUS
-# ---------------------------------
+    st.header("Capital & watchlist")
+    budget = st.number_input("Maximum total budget (₹)", min_value=1, max_value=200, value=200, step=10)
+    risk_pct = st.slider("Minimum stop-distance floor (%)", 1, 5, 2)
+    cost_buffer = st.slider("Estimated cost buffer (%)", 0.0, 2.0, 0.5, 0.1,
+                            help="Planning buffer only; actual Groww/exchange charges vary.")
+    symbols_text = st.text_area("NSE symbols (one per line)", "\n".join(get_candidate_symbols()))
+    symbols = get_candidate_symbols(symbols_text.splitlines(), limit=30)
+    st.caption("Data provider: Yahoo Finance via yfinance; not an official live NSE feed.")
 
 now = datetime.now(TZ)
+a, b, c = st.columns(3)
+a.metric("India time", now.strftime("%d %b %Y • %I:%M %p"))
+b.metric("Market session", market_session(now))
+c.metric("Available capital", rupee(budget))
+st.warning("No guaranteed trades or returns. A signal is a screening result, not a personalized instruction. With ₹200, charges and spread can outweigh small gains. Never exceed your budget.")
 
-col1, col2, col3 = st.columns(3)
+tabs = st.tabs(["🧭 Today's Plan", "🌅 Pre-market", "🔎 Stock Scanner", "⏱ Opening & Exit Monitor", "📈 Charts", "🧪 Backtest", "📝 Paper Journal"])
 
-col1.metric(
-    "Indian Time",
-    now.strftime("%d %b %Y, %I:%M %p")
-)
-
-col2.metric(
-    "Market Status",
-    market_session(now)
-)
-
-col3.metric(
-    "Your Capital",
-    rupee(budget)
-)
-
-st.warning(
-    "₹200 is a very small trading budget. Brokerage, taxes, "
-    "spread and slippage can consume potential profits. "
-    "Use paper trading before risking real money."
-)
-
-# ---------------------------------
-# MAIN TABS
-# ---------------------------------
-
-tab1, tab2, tab3, tab4, tab5 = st.tabs([
-    "📊 Stock Scanner",
-    "⏱ Opening Analysis",
-    "📈 Charts",
-    "🧪 Backtesting",
-    "📝 Paper Trading"
-])
-
-# =================================
-# TAB 1: STOCK SCANNER
-# =================================
-
-with tab1:
-
-    st.subheader("NSE Multi-Factor Stock Scanner")
-
-    st.write(
-        "The scanner checks trend, momentum, volume and "
-        "historical volatility-related indicators."
-    )
-
-    if scan_button or "scan_results" not in st.session_state:
-
-        results = []
-
-        progress = st.progress(0)
-
-        for index, symbol in enumerate(symbols):
-
+with tabs[0]:
+    st.subheader("Today's decision plan")
+    st.write("The app ranks a watchlist, checks the latest available daily trend, then asks for intraday confirmation. It may correctly recommend NO TRADE.")
+    if st.button("Build today's plan", type="primary"):
+        rows, progress = [], st.progress(0)
+        for i, symbol in enumerate(symbols):
             try:
-
-                result = analyse_symbol(
-                    symbol,
-                    budget,
-                    risk_pct
-                )
-
-                results.append(result)
-
-            except Exception as error:
-
-                results.append({
-                    "Symbol": symbol,
-                    "Screen result": f"Unavailable: {str(error)[:100]}"
-                })
-
-            progress.progress(
-                (index + 1) / max(len(symbols), 1)
-            )
-
-        st.session_state.scan_results = results
-
-    results_df = pd.DataFrame(
-        st.session_state.scan_results
-    )
-
-    if not results_df.empty:
-
-        if "Score / 5" in results_df.columns:
-
-            results_df = results_df.sort_values(
-                "Score / 5",
-                ascending=False
-            )
-
-        st.dataframe(
-            results_df,
-            use_container_width=True,
-            hide_index=True
-        )
-
-        st.download_button(
-            "Download Scanner Results",
-            results_df.to_csv(index=False).encode("utf-8"),
-            "market_scan.csv",
-            "text/csv"
-        )
-
-    st.info(
-        "WATCH means investigate further. It is not a guaranteed "
-        "BUY recommendation."
-    )
-
-# =================================
-# TAB 2: OPENING ANALYSIS
-# =================================
-
-with tab2:
-
-    st.subheader("Opening Market Confirmation")
-
-    st.write("""
-    Suggested routine:
-
-    - 9:15 AM: Market opens.
-    - 9:15–9:30 AM: Wait for initial volatility to settle.
-    - After 9:30 AM: Run the opening confirmation.
-    """)
-
-    if opening_button:
-
-        opening_results = []
-
-        with st.spinner("Checking intraday candles..."):
-
-            for symbol in symbols:
-
-                try:
-
-                    result = opening_check(
-                        symbol,
-                        budget
-                    )
-
-                    opening_results.append(result)
-
-                except Exception as error:
-
-                    opening_results.append({
-                        "Symbol": symbol,
-                        "Status": f"Unavailable: {str(error)[:100]}"
-                    })
-
-        st.session_state.opening_results = opening_results
-
-    if "opening_results" in st.session_state:
-
-        opening_df = pd.DataFrame(
-            st.session_state.opening_results
-        )
-
-        st.dataframe(
-            opening_df,
-            use_container_width=True,
-            hide_index=True
-        )
-
-        st.download_button(
-            "Download Opening Analysis",
-            opening_df.to_csv(index=False).encode("utf-8"),
-            "opening_analysis.csv",
-            "text/csv"
-        )
-
-    st.warning(
-        "Yahoo Finance intraday data may be delayed or unavailable. "
-        "Confirm live prices inside Groww."
-    )
-
-# =================================
-# TAB 3: CHARTS
-# =================================
-
-with tab3:
-
-    st.subheader("Stock Charts and Indicators")
-
-    selected_symbol = st.selectbox(
-        "Select NSE Stock",
-        symbols
-    )
-
-    chart_period = st.selectbox(
-        "Chart Period",
-        ["3mo", "6mo", "1y", "2y"],
-        index=2
-    )
-
-    try:
-
-        raw = get_history(
-            selected_symbol,
-            chart_period,
-            "1d"
-        )
-
-        data = add_indicators(raw)
-
-        data = data.dropna(
-            subset=["SMA20", "SMA50"]
-        )
-
-        fig = go.Figure()
-
-        fig.add_trace(
-            go.Candlestick(
-                x=data.index,
-                open=data["Open"],
-                high=data["High"],
-                low=data["Low"],
-                close=data["Close"],
-                name="Stock Price"
-            )
-        )
-
-        fig.add_trace(
-            go.Scatter(
-                x=data.index,
-                y=data["SMA20"],
-                name="SMA 20"
-            )
-        )
-
-        fig.add_trace(
-            go.Scatter(
-                x=data.index,
-                y=data["SMA50"],
-                name="SMA 50"
-            )
-        )
-
-        fig.update_layout(
-            title=selected_symbol + " Stock Chart",
-            height=500,
-            xaxis_rangeslider_visible=False
-        )
-
-        st.plotly_chart(
-            fig,
-            use_container_width=True
-        )
-
-        latest = data.iloc[-1]
-
-        c1, c2, c3, c4 = st.columns(4)
-
-        c1.metric(
-            "Latest Close",
-            rupee(latest["Close"])
-        )
-
-        c2.metric(
-            "RSI",
-            f"{latest['RSI']:.2f}"
-        )
-
-        c3.metric(
-            "ATR",
-            rupee(latest["ATR"])
-        )
-
-        c4.metric(
-            "20-Day Return",
-            f"{latest['Return20']:.2f}%"
-        )
-
-    except Exception as error:
-
-        st.error(
-            f"Chart unavailable: {error}"
-        )
-
-# =================================
-# TAB 4: BACKTESTING
-# =================================
-
-with tab4:
-
-    st.subheader("Historical Strategy Backtesting")
-
-    st.write(
-        "Test a simple trend-following strategy against historical data."
-    )
-
-    backtest_symbol = st.selectbox(
-        "Select Stock",
-        symbols,
-        key="backtest_symbol"
-    )
-
-    backtest_period = st.selectbox(
-        "Testing Period",
-        ["1y", "2y", "5y"],
-        index=1
-    )
-
-    if st.button("Run Backtest"):
-
+                rows.append(analyse_symbol(symbol, budget, risk_pct, cost_buffer))
+            except Exception as exc:
+                rows.append({"Symbol": symbol, "Screen status": f"Unavailable: {str(exc)[:100]}", "Score / 5": -1})
+            progress.progress((i + 1) / max(1, len(symbols)))
+        st.session_state["daily_plan"] = rows
+    if "daily_plan" in st.session_state:
+        plan = pd.DataFrame(st.session_state["daily_plan"])
+        if "Score / 5" in plan:
+            plan = plan.sort_values("Score / 5", ascending=False)
+        st.dataframe(plan, use_container_width=True, hide_index=True)
+        candidates = plan[plan.get("Screen status", pd.Series(dtype=str)).astype(str).str.startswith("WATCH")]
+        if candidates.empty:
+            st.info("No daily candidate passed the screen. Keeping the ₹200 uninvested is a valid result.")
+        else:
+            st.success("Daily trend candidates found. They are WATCHLIST candidates only; wait for opening confirmation and verify the live quote before any order.")
+        st.download_button("Download today's plan CSV", plan.to_csv(index=False).encode(), "todays_plan.csv", "text/csv")
+    else:
+        st.info("Press “Build today's plan” to scan the watchlist. No scan runs automatically in the background.")
+
+with tabs[1]:
+    st.subheader("Pre-market context")
+    st.write("This section shows the latest available daily index closes and their prior-session changes. Yahoo Finance does not provide a dependable official NSE pre-open feed here.")
+    if st.button("Refresh market context"):
+        with st.spinner("Fetching latest available index data..."):
+            st.session_state["market_context"] = premarket_summary()
+    if "market_context" in st.session_state:
+        context = st.session_state["market_context"]
+        st.metric("Previous-session context", context["bias"])
+        st.write(context["message"])
+        st.dataframe(context["overview"], use_container_width=True, hide_index=True)
+    else:
+        st.info("Refresh to load Nifty, Sensex and selected global-market context. These are latest available daily values, not live pre-market indications.")
+
+with tabs[2]:
+    st.subheader("Multi-factor NSE cash-market scanner")
+    st.write("Trend, RSI, volume, ATR and budget fit. Ranking does not predict returns.")
+    if st.button("Scan watchlist now"):
+        results, progress = [], st.progress(0)
+        for i, symbol in enumerate(symbols):
+            try:
+                results.append(analyse_symbol(symbol, budget, risk_pct, cost_buffer))
+            except Exception as exc:
+                results.append({"Symbol": symbol, "Screen status": f"Unavailable: {str(exc)[:100]}", "Score / 5": -1})
+            progress.progress((i + 1) / max(1, len(symbols)))
+        st.session_state["scan_results"] = results
+    if "scan_results" in st.session_state:
+        df = pd.DataFrame(st.session_state["scan_results"]).sort_values("Score / 5", ascending=False)
+        st.dataframe(df, use_container_width=True, hide_index=True)
+        st.download_button("Download scan CSV", df.to_csv(index=False).encode(), "nse_scan.csv", "text/csv")
+    st.caption("Quantity is calculated using the latest available daily close and a configurable cost buffer. Recalculate using the actual live quote before placing any order.")
+
+with tabs[3]:
+    st.subheader("Intraday entry confirmation")
+    st.write("Run after 9:30 AM IST. The check uses the latest session's available 5-minute candles, session VWAP and prior-candle breakout. Delayed or stale candles can produce misleading results.")
+    chosen = st.selectbox("Stock to check", symbols, key="opening_symbol")
+    if st.button("Check entry conditions"):
         try:
+            st.session_state["opening_check"] = opening_check(chosen, budget, cost_buffer)
+        except Exception as exc:
+            st.error(f"Intraday check unavailable: {exc}")
+    if "opening_check" in st.session_state:
+        item = st.session_state["opening_check"]
+        st.dataframe(pd.DataFrame([item]), use_container_width=True, hide_index=True)
+        st.info("Even SETUP WATCH is not an instruction to buy. Verify live quote, liquidity, spread and charges in Groww.")
+    st.divider()
+    st.subheader("Monitor a position you already hold (manual inputs)")
+    x1, x2, x3 = st.columns(3)
+    with x1:
+        pos_symbol = st.selectbox("Held stock", symbols, key="held_symbol")
+        pos_qty = st.number_input("Quantity held", min_value=1, max_value=10000, value=1)
+    with x2:
+        entry = st.number_input("Your entry price (₹)", min_value=0.01, value=10.0)
+        stop = st.number_input("Your stop level (₹)", min_value=0.01, value=9.5)
+    with x3:
+        target = st.number_input("Your target level (₹)", min_value=0.01, value=11.0)
+    if st.button("Check exit conditions"):
+        try:
+            st.session_state["exit_check"] = exit_monitor(pos_symbol, pos_qty, entry, stop, target)
+        except Exception as exc:
+            st.error(f"Exit check unavailable: {exc}")
+    if "exit_check" in st.session_state:
+        st.dataframe(pd.DataFrame([st.session_state["exit_check"]]), use_container_width=True, hide_index=True)
+        st.caption("Exit checks use the latest available 5-minute data, which may be delayed. A stop level is not a guaranteed execution price.")
 
-            with st.spinner("Testing historical data..."):
+with tabs[4]:
+    st.subheader("Price chart and indicators")
+    chart_symbol = st.selectbox("Chart stock", symbols, key="chart_symbol")
+    period = st.selectbox("Period", ["3mo", "6mo", "1y", "2y"], index=2)
+    if st.button("Load chart"):
+        try:
+            data = add_indicators(get_history(chart_symbol, period, "1d")).dropna(subset=["SMA20", "SMA50"])
+            fig = go.Figure()
+            fig.add_trace(go.Candlestick(x=data.index, open=data["Open"], high=data["High"], low=data["Low"], close=data["Close"], name="Price"))
+            fig.add_trace(go.Scatter(x=data.index, y=data["SMA20"], name="SMA20"))
+            fig.add_trace(go.Scatter(x=data.index, y=data["SMA50"], name="SMA50"))
+            fig.update_layout(height=520, xaxis_rangeslider_visible=False, title=f"{chart_symbol} — daily")
+            st.plotly_chart(fig, use_container_width=True)
+            last = data.iloc[-1]
+            m1, m2, m3 = st.columns(3)
+            m1.metric("Latest close", rupee(last["Close"]))
+            m2.metric("RSI", f"{last['RSI']:.1f}")
+            m3.metric("ATR", rupee(last["ATR"]))
+        except Exception as exc:
+            st.error(f"Chart unavailable: {exc}")
 
-                result = simple_backtest(
-                    backtest_symbol,
-                    backtest_period
-                )
+with tabs[5]:
+    st.subheader("Historical strategy test")
+    bt_symbol = st.selectbox("Backtest stock", symbols, key="bt_symbol")
+    bt_period = st.selectbox("History", ["1y", "2y", "5y"], index=1, key="bt_period")
+    if st.button("Run backtest"):
+        try:
+            result = simple_backtest(bt_symbol, bt_period)
+            m1, m2, m3, m4 = st.columns(4)
+            m1.metric("Strategy return", f"{result['total_return']:.2f}%")
+            m2.metric("Buy & hold", f"{result['buy_hold']:.2f}%")
+            m3.metric("Max drawdown", f"{result['max_drawdown']:.2f}%")
+            m4.metric("Entries", result["trades"])
+            st.line_chart(result["equity"])
+            st.caption("Illustrative daily strategy only; excludes transaction costs, taxes, slippage and market impact. Past performance is not predictive.")
+        except Exception as exc:
+            st.error(f"Backtest failed: {exc}")
 
-            c1, c2, c3, c4 = st.columns(4)
-
-            c1.metric(
-                "Strategy Return",
-                f"{result['total_return']:.2f}%"
-            )
-
-            c2.metric(
-                "Buy & Hold Return",
-                f"{result['buy_hold']:.2f}%"
-            )
-
-            c3.metric(
-                "Maximum Drawdown",
-                f"{result['max_drawdown']:.2f}%"
-            )
-
-            c4.metric(
-                "Number of Entries",
-                result["trades"]
-            )
-
-            st.line_chart(
-                result["equity"]
-            )
-
-            st.caption(
-                "Historical results exclude brokerage, taxes, "
-                "slippage and market impact. Past performance "
-                "does not predict future returns."
-            )
-
-        except Exception as error:
-
-            st.error(
-                f"Backtest failed: {error}"
-            )
-
-# =================================
-# TAB 5: PAPER TRADING
-# =================================
-
-with tab5:
-
-    st.subheader("Paper Trading Journal")
-
-    st.write(
-        "Record hypothetical trades and monitor your performance."
-    )
-
-    with st.form("paper_trade_form"):
-
-        c1, c2, c3 = st.columns(3)
-
-        with c1:
-
-            trade_symbol = st.text_input(
-                "Stock Symbol",
-                value=symbols[0] if symbols else "NHPC"
-            ).upper().strip()
-
-            entry_price = st.number_input(
-                "Entry Price (₹)",
-                min_value=0.01,
-                value=10.0
-            )
-
-        with c2:
-
-            quantity = st.number_input(
-                "Quantity",
-                min_value=1,
-                max_value=200,
-                value=1
-            )
-
-            exit_price = st.number_input(
-                "Exit Price (₹)",
-                min_value=0.01,
-                value=10.0
-            )
-
-        with c3:
-
-            trade_date = st.date_input(
-                "Trade Date",
-                value=now.date()
-            )
-
-            notes = st.text_input(
-                "Trade Notes"
-            )
-
-        save_trade = st.form_submit_button(
-            "Save Paper Trade"
-        )
-
-    if save_trade:
-
-        profit = (
-            exit_price - entry_price
-        ) * quantity
-
-        new_trade = pd.DataFrame([{
-
-            "Date": str(trade_date),
-            "Symbol": trade_symbol,
-            "Quantity": quantity,
-            "Entry Price": entry_price,
-            "Exit Price": exit_price,
-            "Profit Before Charges": round(profit, 2),
-            "Notes": notes
-
-        }])
-
-        if LEDGER.exists():
-
-            old_trades = pd.read_csv(LEDGER)
-
-            new_trade = pd.concat(
-                [old_trades, new_trade],
-                ignore_index=True
-            )
-
-        new_trade.to_csv(
-            LEDGER,
-            index=False
-        )
-
-        st.success(
-            "Paper trade saved successfully!"
-        )
-
+with tabs[6]:
+    st.subheader("Paper-trading journal")
+    st.caption("The free Render filesystem may reset on redeploy or restart. Download your CSV regularly; use a managed database before relying on long-term records.")
+    with st.form("paper_trade"):
+        f1, f2, f3 = st.columns(3)
+        with f1:
+            trade_symbol = st.selectbox("Symbol", symbols, key="paper_symbol")
+            trade_date = st.date_input("Trade date", value=now.date())
+        with f2:
+            qty = st.number_input("Quantity", min_value=1, max_value=10000, value=1)
+            buy_price = st.number_input("Entry price (₹)", min_value=0.01, value=10.0, key="paper_buy")
+        with f3:
+            sell_price = st.number_input("Exit price (₹)", min_value=0.01, value=10.0, key="paper_sell")
+            note = st.text_input("Notes")
+        submitted = st.form_submit_button("Save closed paper trade")
+    if submitted:
+        profit = (sell_price - buy_price) * qty
+        new_row = pd.DataFrame([{"Date": str(trade_date), "Symbol": trade_symbol, "Qty": qty,
+                                 "Entry": buy_price, "Exit": sell_price,
+                                 "P/L before charges": round(profit, 2), "Notes": note}])
+        old = pd.read_csv(LEDGER) if LEDGER.exists() else pd.DataFrame()
+        pd.concat([old, new_row], ignore_index=True).to_csv(LEDGER, index=False)
+        st.success("Paper trade recorded for this running instance.")
     if LEDGER.exists():
-
         journal = pd.read_csv(LEDGER)
-
-        st.dataframe(
-            journal,
-            use_container_width=True,
-            hide_index=True
-        )
-
-        total_profit = pd.to_numeric(
-            journal["Profit Before Charges"],
-            errors="coerce"
-        ).fillna(0).sum()
-
-        st.metric(
-            "Total Paper Profit / Loss",
-            rupee(total_profit)
-        )
-
-        st.download_button(
-            "Download Trading Journal",
-            journal.to_csv(index=False).encode("utf-8"),
-            "paper_trades.csv",
-            "text/csv"
-        )
-
-# ---------------------------------
-# FOOTER
-# ---------------------------------
+        st.dataframe(journal, use_container_width=True, hide_index=True)
+        pnl = pd.to_numeric(journal["P/L before charges"], errors="coerce").fillna(0).sum()
+        st.metric("Cumulative paper P/L before charges", rupee(pnl))
+        st.download_button("Download journal CSV", journal.to_csv(index=False).encode(), "paper_trades.csv", "text/csv")
 
 st.divider()
-
-st.subheader("Beginner Trading Rules")
-
+st.subheader("Risk rules")
 st.markdown("""
-1. Prefer delivery/cash equity while learning.
-2. Buy only whole shares within your budget.
-3. Do not trade if the scanner shows no clear setup.
-4. Stop-loss levels are not guaranteed execution prices.
-5. Avoid F&O, options, futures, leverage and borrowed money.
-6. Check live prices and all charges in Groww before placing an order.
+- NSE listed cash-equity only; no F&O, options, futures, leverage, margin or short selling.
+- A WATCH/SETUP WATCH is not a BUY order. Verify current prices and liquidity in Groww.
+- Never spend more than the ₹200 cap, including a buffer for charges.
+- No trade is better than a low-quality setup.
+- This app does not connect to Groww, place orders or guarantee alerts.
 """)
-
-st.caption(
-    "Market data: Yahoo Finance through yfinance. "
-    "This application does not connect to Groww or place trades."
-)
+st.caption("Educational decision-support software, not investment advice. Market data is sourced from Yahoo Finance and may be delayed, incomplete or unavailable.")
