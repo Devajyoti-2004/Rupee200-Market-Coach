@@ -619,3 +619,39 @@ def simple_backtest(
         "data": df
 
     }
+# =================================
+# NSE CANDIDATE SYMBOLS
+# =================================
+
+def get_candidate_symbols(symbols=None, limit=30):
+
+    defaults = [
+        "NHPC",
+        "IRFC",
+        "IOC",
+        "ONGC",
+        "PNB",
+        "BANKBARODA",
+        "TATAPOWER",
+        "SUZLON",
+        "IDEA",
+        "YESBANK"
+    ]
+
+    values = defaults if symbols is None else symbols
+
+    cleaned = []
+
+    for item in values:
+
+        symbol = (
+            str(item)
+            .strip()
+            .upper()
+            .replace(".NS", "")
+        )
+
+        if symbol and symbol not in cleaned:
+            cleaned.append(symbol)
+
+    return cleaned[:max(1, int(limit))]
