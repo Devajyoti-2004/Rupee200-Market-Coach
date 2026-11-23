@@ -1,621 +1,584 @@
-import math
+import streamlit as st
 import pandas as pd
-import yfinance as yf
+import plotly.graph_objects as go
 
-from datetime import time
+from datetime import datetime
 from zoneinfo import ZoneInfo
+from pathlib import Path
 
+from analyzer import (
+    analyse_symbol,
+    get_candidate_symbols,
+    market_session,
+    opening_check,
+    simple_backtest,
+    rupee,
+    get_history,
+    add_indicators
+)
+
+# ---------------------------------
+# APP CONFIGURATION
+# ---------------------------------
+
+st.set_page_config(
+    page_title="₹200 Market Coach",
+    page_icon="📈",
+    layout="wide"
+)
+
+st.title("📈 ₹200 Market Coach")
+st.caption(
+    "NSE Cash Market | Beginner Friendly | AI-style Market Analysis"
+)
+
+TZ = ZoneInfo("Asia/Kolkata")
+LEDGER = Path("paper_trades.csv")
+
+# ---------------------------------
+# SIDEBAR
+# ---------------------------------
+
+with st.sidebar:
+
+    st.header("Your Investment Settings")
+
+    budget = st.number_input(
+        "Maximum Investment (₹)",
+        min_value=1,
+        max_value=200,
+        value=200,
+        step=10
+    )
+
+    risk_pct = st.slider(
+        "Illustrative Stop Distance (%)",
+        1,
+        5,
+        2
+    )
+
+    default_symbols = get_candidate_symbols()
+
+    symbols_text = st.text_area(
+        "NSE Watchlist",
+        "\n".join(default_symbols)
+    )
+
+    symbols = get_candidate_symbols(
+        symbols_text.splitlines(),
+        limit=30
+    )
+
+    scan_button = st.button(
+        "🔎 Scan Stock Market",
+        type="primary",
+        use_container_width=True
+    )
+
+    opening_button = st.button(
+        "⏱ Opening Confirmation",
+        use_container_width=True
+    )
+
+# ---------------------------------
+# MARKET STATUS
+# ---------------------------------
+
+now = datetime.now(TZ)
+
+col1, col2, col3 = st.columns(3)
+
+col1.metric(
+    "Indian Time",
+    now.strftime("%d %b %Y, %I:%M %p")
+)
+
+col2.metric(
+    "Market Status",
+    market_session(now)
+)
+
+col3.metric(
+    "Your Capital",
+    rupee(budget)
+)
+
+st.warning(
+    "₹200 is a very small trading budget. Brokerage, taxes, "
+    "spread and slippage can consume potential profits. "
+    "Use paper trading before risking real money."
+)
+
+# ---------------------------------
+# MAIN TABS
+# ---------------------------------
+
+tab1, tab2, tab3, tab4, tab5 = st.tabs([
+    "📊 Stock Scanner",
+    "⏱ Opening Analysis",
+    "📈 Charts",
+    "🧪 Backtesting",
+    "📝 Paper Trading"
+])
 
 # =================================
-# CURRENCY FORMAT
+# TAB 1: STOCK SCANNER
 # =================================
 
-def rupee(value):
+with tab1:
+
+    st.subheader("NSE Multi-Factor Stock Scanner")
+
+    st.write(
+        "The scanner checks trend, momentum, volume and "
+        "historical volatility-related indicators."
+    )
+
+    if scan_button or "scan_results" not in st.session_state:
+
+        results = []
+
+        progress = st.progress(0)
+
+        for index, symbol in enumerate(symbols):
+
+            try:
+
+                result = analyse_symbol(
+                    symbol,
+                    budget,
+                    risk_pct
+                )
+
+                results.append(result)
+
+            except Exception as error:
+
+                results.append({
+                    "Symbol": symbol,
+                    "Screen result": f"Unavailable: {str(error)[:100]}"
+                })
+
+            progress.progress(
+                (index + 1) / max(len(symbols), 1)
+            )
+
+        st.session_state.scan_results = results
+
+    results_df = pd.DataFrame(
+        st.session_state.scan_results
+    )
+
+    if not results_df.empty:
+
+        if "Score / 5" in results_df.columns:
+
+            results_df = results_df.sort_values(
+                "Score / 5",
+                ascending=False
+            )
+
+        st.dataframe(
+            results_df,
+            use_container_width=True,
+            hide_index=True
+        )
+
+        st.download_button(
+            "Download Scanner Results",
+            results_df.to_csv(index=False).encode("utf-8"),
+            "market_scan.csv",
+            "text/csv"
+        )
+
+    st.info(
+        "WATCH means investigate further. It is not a guaranteed "
+        "BUY recommendation."
+    )
+
+# =================================
+# TAB 2: OPENING ANALYSIS
+# =================================
+
+with tab2:
+
+    st.subheader("Opening Market Confirmation")
+
+    st.write("""
+    Suggested routine:
+
+    - 9:15 AM: Market opens.
+    - 9:15–9:30 AM: Wait for initial volatility to settle.
+    - After 9:30 AM: Run the opening confirmation.
+    """)
+
+    if opening_button:
+
+        opening_results = []
+
+        with st.spinner("Checking intraday candles..."):
+
+            for symbol in symbols:
+
+                try:
+
+                    result = opening_check(
+                        symbol,
+                        budget
+                    )
+
+                    opening_results.append(result)
+
+                except Exception as error:
+
+                    opening_results.append({
+                        "Symbol": symbol,
+                        "Status": f"Unavailable: {str(error)[:100]}"
+                    })
+
+        st.session_state.opening_results = opening_results
+
+    if "opening_results" in st.session_state:
+
+        opening_df = pd.DataFrame(
+            st.session_state.opening_results
+        )
+
+        st.dataframe(
+            opening_df,
+            use_container_width=True,
+            hide_index=True
+        )
+
+        st.download_button(
+            "Download Opening Analysis",
+            opening_df.to_csv(index=False).encode("utf-8"),
+            "opening_analysis.csv",
+            "text/csv"
+        )
+
+    st.warning(
+        "Yahoo Finance intraday data may be delayed or unavailable. "
+        "Confirm live prices inside Groww."
+    )
+
+# =================================
+# TAB 3: CHARTS
+# =================================
+
+with tab3:
+
+    st.subheader("Stock Charts and Indicators")
+
+    selected_symbol = st.selectbox(
+        "Select NSE Stock",
+        symbols
+    )
+
+    chart_period = st.selectbox(
+        "Chart Period",
+        ["3mo", "6mo", "1y", "2y"],
+        index=2
+    )
 
     try:
-        return f"₹{float(value):,.2f}"
 
-    except (TypeError, ValueError):
-
-        return "—"
-
-
-# =================================
-# NSE WATCHLIST
-# =================================
-
-def get_candidate_symbols(symbols=None, limit=30):
-
-    defaults = [
-        "NHPC",
-        "IRFC",
-        "IOC",
-        "ONGC",
-        "PNB",
-        "BANKBARODA",
-        "TATAPOWER",
-        "SUZLON",
-        "IDEA",
-        "YESBANK"
-    ]
-
-    values = defaults if symbols is None else symbols
-
-    cleaned = []
-
-    for item in values:
-
-        symbol = (
-            str(item)
-            .strip()
-            .upper()
-            .replace(".NS", "")
+        raw = get_history(
+            selected_symbol,
+            chart_period,
+            "1d"
         )
 
-        if symbol and symbol not in cleaned:
+        data = add_indicators(raw)
 
-            cleaned.append(symbol)
-
-    return cleaned[:max(1, int(limit))]
-
-
-# =================================
-# MARKET STATUS
-# =================================
-
-def market_session(now):
-
-    if now.weekday() >= 5:
-
-        return "Weekend — Market Closed"
-
-    india_time = now.astimezone(
-        ZoneInfo("Asia/Kolkata")
-    ).time()
-
-    if time(9, 0) <= india_time < time(9, 15):
-
-        return "Pre-Open Session"
-
-    if time(9, 15) <= india_time < time(15, 30):
-
-        return "Regular NSE Session"
-
-    return "Market Closed"
-
-
-# =================================
-# FETCH STOCK DATA
-# =================================
-
-def get_history(
-    symbol,
-    period="1y",
-    interval="1d"
-):
-
-    ticker = yf.Ticker(
-        f"{symbol}.NS"
-    )
-
-    data = ticker.history(
-        period=period,
-        interval=interval,
-        auto_adjust=True
-    )
-
-    if data.empty:
-
-        raise ValueError(
-            "No market data available. Check the NSE symbol."
+        data = data.dropna(
+            subset=["SMA20", "SMA50"]
         )
 
-    return data.dropna(
-        subset=["Close"]
-    ).copy()
+        fig = go.Figure()
 
-
-# =================================
-# TECHNICAL INDICATORS
-# =================================
-
-def add_indicators(data):
-
-    df = data.copy()
-
-    close = df["Close"]
-
-    # Moving averages
-
-    df["SMA20"] = close.rolling(20).mean()
-
-    df["SMA50"] = close.rolling(50).mean()
-
-    # Exponential moving averages
-
-    df["EMA9"] = close.ewm(
-        span=9,
-        adjust=False
-    ).mean()
-
-    df["EMA21"] = close.ewm(
-        span=21,
-        adjust=False
-    ).mean()
-
-    # RSI
-
-    delta = close.diff()
-
-    gain = delta.clip(lower=0)
-
-    loss = -delta.clip(upper=0)
-
-    avg_gain = gain.ewm(
-        alpha=1 / 14,
-        adjust=False
-    ).mean()
-
-    avg_loss = loss.ewm(
-        alpha=1 / 14,
-        adjust=False
-    ).mean()
-
-    rs = avg_gain / avg_loss.replace(
-        0,
-        float("nan")
-    )
-
-    df["RSI"] = 100 - (
-        100 / (1 + rs)
-    )
-
-    # ATR
-
-    tr1 = df["High"] - df["Low"]
-
-    tr2 = (
-        df["High"] - df["Close"].shift()
-    ).abs()
-
-    tr3 = (
-        df["Low"] - df["Close"].shift()
-    ).abs()
-
-    true_range = pd.concat(
-        [tr1, tr2, tr3],
-        axis=1
-    ).max(axis=1)
-
-    df["ATR"] = true_range.rolling(14).mean()
-
-    # Volume
-
-    df["VolAvg20"] = (
-        df["Volume"].rolling(20).mean()
-    )
-
-    # Returns
-
-    df["Return20"] = (
-        close.pct_change(20) * 100
-    )
-
-    return df
-
-
-# =================================
-# STOCK ANALYSIS
-# =================================
-
-def analyse_symbol(
-    symbol,
-    budget,
-    risk_pct=2
-):
-
-    raw = get_history(
-        symbol,
-        "1y",
-        "1d"
-    )
-
-    df = add_indicators(raw)
-
-    df = df.dropna(
-        subset=["SMA20", "SMA50", "RSI", "ATR"]
-    )
-
-    if len(df) < 2:
-
-        raise ValueError(
-            "Insufficient historical data."
+        fig.add_trace(
+            go.Candlestick(
+                x=data.index,
+                open=data["Open"],
+                high=data["High"],
+                low=data["Low"],
+                close=data["Close"],
+                name="Stock Price"
+            )
         )
 
-    latest = df.iloc[-1]
-
-    price = float(latest["Close"])
-
-    rsi = float(latest["RSI"])
-
-    sma20 = float(latest["SMA20"])
-
-    sma50 = float(latest["SMA50"])
-
-    ema9 = float(latest["EMA9"])
-
-    ema21 = float(latest["EMA21"])
-
-    volume = float(latest["Volume"])
-
-    average_volume = float(
-        latest["VolAvg20"]
-    )
-
-    atr = float(latest["ATR"])
-
-    # Analysis conditions
-
-    checks = {
-
-        "Price above SMA20":
-            price > sma20,
-
-        "SMA20 above SMA50":
-            sma20 > sma50,
-
-        "EMA9 above EMA21":
-            ema9 > ema21,
-
-        "RSI between 45 and 65":
-            45 <= rsi <= 65,
-
-        "Volume above average":
-            volume > average_volume
-
-    }
-
-    score = sum(
-        checks.values()
-    )
-
-    # Budget calculation
-
-    quantity = int(
-        budget // price
-    )
-
-    investment = quantity * price
-
-    # Illustrative ATR levels
-
-    stop_loss = max(
-        0.01,
-        price - (1.5 * atr)
-    )
-
-    target = price + (2 * atr)
-
-    risk_per_share = (
-        price - stop_loss
-    )
-
-    total_risk = (
-        risk_per_share * quantity
-    )
-
-    # Result
-
-    if quantity < 1:
-
-        verdict = "SKIP — Stock exceeds budget"
-
-    elif rsi >= 72:
-
-        verdict = "AVOID CHASING — Momentum stretched"
-
-    elif score >= 4:
-
-        verdict = "WATCH — Conditions align"
-
-    else:
-
-        verdict = "NO CLEAR SETUP"
-
-    passed = ", ".join(
-        name
-        for name, value in checks.items()
-        if value
-    )
-
-    failed = ", ".join(
-        name
-        for name, value in checks.items()
-        if not value
-    )
-
-    return {
-
-        "Symbol": symbol,
-
-        "Latest Close (₹)": round(price, 2),
-
-        "Affordable Quantity": quantity,
-
-        "Investment Value (₹)": round(
-            investment,
-            2
-        ),
-
-        "RSI": round(rsi, 2),
-
-        "SMA20 (₹)": round(sma20, 2),
-
-        "SMA50 (₹)": round(sma50, 2),
-
-        "ATR (₹)": round(atr, 2),
-
-        "Score / 5": score,
-
-        "Screen result": verdict,
-
-        "Conditions Passed": passed,
-
-        "Conditions Failed": failed,
-
-        "Illustrative Stop (₹)": round(
-            stop_loss,
-            2
-        ),
-
-        "Illustrative Target (₹)": round(
-            target,
-            2
-        ),
-
-        "Estimated Position Risk (₹)": round(
-            total_risk,
-            2
-        ),
-
-        "Data Date": str(
-            df.index[-1].date()
+        fig.add_trace(
+            go.Scatter(
+                x=data.index,
+                y=data["SMA20"],
+                name="SMA 20"
+            )
         )
 
-    }
+        fig.add_trace(
+            go.Scatter(
+                x=data.index,
+                y=data["SMA50"],
+                name="SMA 50"
+            )
+        )
 
+        fig.update_layout(
+            title=selected_symbol + " Stock Chart",
+            height=500,
+            xaxis_rangeslider_visible=False
+        )
+
+        st.plotly_chart(
+            fig,
+            use_container_width=True
+        )
+
+        latest = data.iloc[-1]
+
+        c1, c2, c3, c4 = st.columns(4)
+
+        c1.metric(
+            "Latest Close",
+            rupee(latest["Close"])
+        )
+
+        c2.metric(
+            "RSI",
+            f"{latest['RSI']:.2f}"
+        )
+
+        c3.metric(
+            "ATR",
+            rupee(latest["ATR"])
+        )
+
+        c4.metric(
+            "20-Day Return",
+            f"{latest['Return20']:.2f}%"
+        )
+
+    except Exception as error:
+
+        st.error(
+            f"Chart unavailable: {error}"
+        )
 
 # =================================
-# OPENING CONFIRMATION
+# TAB 4: BACKTESTING
 # =================================
 
-def opening_check(
-    symbol,
-    budget
-):
+with tab4:
 
-    df = get_history(
-        symbol,
-        "5d",
-        "5m"
+    st.subheader("Historical Strategy Backtesting")
+
+    st.write(
+        "Test a simple trend-following strategy against historical data."
     )
 
-    if len(df) < 5:
-
-        raise ValueError(
-            "Insufficient intraday candles."
-        )
-
-    recent = df.tail(12)
-
-    typical_price = (
-        recent["High"]
-        + recent["Low"]
-        + recent["Close"]
-    ) / 3
-
-    volume = recent["Volume"].fillna(0)
-
-    if volume.sum() > 0:
-
-        vwap = float(
-            (typical_price * volume).sum()
-            / volume.sum()
-        )
-
-    else:
-
-        vwap = float(
-            typical_price.mean()
-        )
-
-    latest_price = float(
-        df["Close"].iloc[-1]
+    backtest_symbol = st.selectbox(
+        "Select Stock",
+        symbols,
+        key="backtest_symbol"
     )
 
-    previous_price = float(
-        df["Close"].iloc[-2]
+    backtest_period = st.selectbox(
+        "Testing Period",
+        ["1y", "2y", "5y"],
+        index=1
     )
 
-    quantity = int(
-        budget // latest_price
-    )
+    if st.button("Run Backtest"):
 
-    above_vwap = (
-        latest_price > vwap
-    )
+        try:
 
-    rising = (
-        latest_price > previous_price
-    )
+            with st.spinner("Testing historical data..."):
 
-    if quantity < 1:
+                result = simple_backtest(
+                    backtest_symbol,
+                    backtest_period
+                )
 
-        status = "SKIP — Unaffordable"
+            c1, c2, c3, c4 = st.columns(4)
 
-    elif above_vwap and rising:
+            c1.metric(
+                "Strategy Return",
+                f"{result['total_return']:.2f}%"
+            )
 
-        status = "WATCH ONLY — Conditions align"
+            c2.metric(
+                "Buy & Hold Return",
+                f"{result['buy_hold']:.2f}%"
+            )
 
-    else:
+            c3.metric(
+                "Maximum Drawdown",
+                f"{result['max_drawdown']:.2f}%"
+            )
 
-        status = "WAIT — No confirmation"
+            c4.metric(
+                "Number of Entries",
+                result["trades"]
+            )
 
-    return {
+            st.line_chart(
+                result["equity"]
+            )
 
-        "Symbol": symbol,
+            st.caption(
+                "Historical results exclude brokerage, taxes, "
+                "slippage and market impact. Past performance "
+                "does not predict future returns."
+            )
 
-        "Latest 5m Price (₹)": round(
-            latest_price,
-            2
-        ),
+        except Exception as error:
 
-        "Approx VWAP (₹)": round(
-            vwap,
-            2
-        ),
-
-        "Above VWAP": above_vwap,
-
-        "Last Candle Rising": rising,
-
-        "Affordable Quantity": quantity,
-
-        "Status": status,
-
-        "Timestamp": str(
-            df.index[-1]
-        )
-
-    }
-
+            st.error(
+                f"Backtest failed: {error}"
+            )
 
 # =================================
-# HISTORICAL BACKTEST
+# TAB 5: PAPER TRADING
 # =================================
 
-def simple_backtest(
-    symbol,
-    period="2y"
-):
+with tab5:
 
-    raw = get_history(
-        symbol,
-        period,
-        "1d"
+    st.subheader("Paper Trading Journal")
+
+    st.write(
+        "Record hypothetical trades and monitor your performance."
     )
 
-    df = add_indicators(raw)
+    with st.form("paper_trade_form"):
 
-    df = df.dropna(
-        subset=["SMA20", "SMA50", "RSI"]
-    ).copy()
+        c1, c2, c3 = st.columns(3)
 
-    entry_signal = (
+        with c1:
 
-        (df["Close"] > df["SMA50"])
+            trade_symbol = st.text_input(
+                "Stock Symbol",
+                value=symbols[0] if symbols else "NHPC"
+            ).upper().strip()
 
-        & (df["EMA9"] > df["EMA21"])
+            entry_price = st.number_input(
+                "Entry Price (₹)",
+                min_value=0.01,
+                value=10.0
+            )
 
-        & (df["RSI"] > 45)
+        with c2:
 
-        & (df["RSI"] < 68)
+            quantity = st.number_input(
+                "Quantity",
+                min_value=1,
+                max_value=200,
+                value=1
+            )
 
-    )
+            exit_price = st.number_input(
+                "Exit Price (₹)",
+                min_value=0.01,
+                value=10.0
+            )
 
-    exit_signal = (
+        with c3:
 
-        (df["Close"] < df["SMA20"])
+            trade_date = st.date_input(
+                "Trade Date",
+                value=now.date()
+            )
 
-        | (df["RSI"] > 75)
+            notes = st.text_input(
+                "Trade Notes"
+            )
 
-    )
-
-    state = False
-
-    positions = []
-
-    # Use previous day's signal to avoid same-day signal execution.
-
-    entries = entry_signal.shift(1).fillna(False)
-
-    exits = exit_signal.shift(1).fillna(False)
-
-    for enter, exit_trade in zip(
-        entries,
-        exits
-    ):
-
-        if exit_trade:
-
-            state = False
-
-        elif enter:
-
-            state = True
-
-        positions.append(
-            1.0 if state else 0.0
+        save_trade = st.form_submit_button(
+            "Save Paper Trade"
         )
 
-    position = pd.Series(
-        positions,
-        index=df.index
-    )
+    if save_trade:
 
-    daily_returns = (
-        df["Close"].pct_change().fillna(0)
-    )
+        profit = (
+            exit_price - entry_price
+        ) * quantity
 
-    strategy_returns = (
-        position.shift(1).fillna(0)
-        * daily_returns
-    )
+        new_trade = pd.DataFrame([{
 
-    equity = (
-        1 + strategy_returns
-    ).cumprod()
+            "Date": str(trade_date),
+            "Symbol": trade_symbol,
+            "Quantity": quantity,
+            "Entry Price": entry_price,
+            "Exit Price": exit_price,
+            "Profit Before Charges": round(profit, 2),
+            "Notes": notes
 
-    peak = equity.cummax()
+        }])
 
-    drawdown = (
-        equity / peak - 1
-    ) * 100
+        if LEDGER.exists():
 
-    strategy_return = (
-        equity.iloc[-1] - 1
-    ) * 100
+            old_trades = pd.read_csv(LEDGER)
 
-    buy_hold_return = (
+            new_trade = pd.concat(
+                [old_trades, new_trade],
+                ignore_index=True
+            )
 
-        df["Close"].iloc[-1]
-        / df["Close"].iloc[0]
-        - 1
+        new_trade.to_csv(
+            LEDGER,
+            index=False
+        )
 
-    ) * 100
+        st.success(
+            "Paper trade saved successfully!"
+        )
 
-    trades = int(
-        (position.diff() == 1).sum()
-    )
+    if LEDGER.exists():
 
-    return {
+        journal = pd.read_csv(LEDGER)
 
-        "total_return": float(
-            strategy_return
-        ),
+        st.dataframe(
+            journal,
+            use_container_width=True,
+            hide_index=True
+        )
 
-        "buy_hold": float(
-            buy_hold_return
-        ),
+        total_profit = pd.to_numeric(
+            journal["Profit Before Charges"],
+            errors="coerce"
+        ).fillna(0).sum()
 
-        "max_drawdown": float(
-            drawdown.min()
-        ),
+        st.metric(
+            "Total Paper Profit / Loss",
+            rupee(total_profit)
+        )
 
-        "trades": trades,
+        st.download_button(
+            "Download Trading Journal",
+            journal.to_csv(index=False).encode("utf-8"),
+            "paper_trades.csv",
+            "text/csv"
+        )
 
-        "equity": equity,
+# ---------------------------------
+# FOOTER
+# ---------------------------------
 
-        "data": df
+st.divider()
 
-    }
+st.subheader("Beginner Trading Rules")
+
+st.markdown("""
+1. Prefer delivery/cash equity while learning.
+2. Buy only whole shares within your budget.
+3. Do not trade if the scanner shows no clear setup.
+4. Stop-loss levels are not guaranteed execution prices.
+5. Avoid F&O, options, futures, leverage and borrowed money.
+6. Check live prices and all charges in Groww before placing an order.
+""")
+
+st.caption(
+    "Market data: Yahoo Finance through yfinance. "
+    "This application does not connect to Groww or place trades."
+)
