@@ -1,70 +1,621 @@
-import streamlit as st
+import math
 import pandas as pd
 import yfinance as yf
-import plotly.graph_objects as go
-from datetime import datetime, time
+
+from datetime import time
 from zoneinfo import ZoneInfo
-from analyzer import analyse_symbol, get_candidate_symbols, rupee, market_session
 
-st.set_page_config(page_title="₹200 Market Coach", page_icon="📈", layout="wide")
-st.title("📈 ₹200 Market Coach")
-st.caption("A beginner-friendly market research dashboard — not an automated trading or guaranteed-profit system.")
 
-with st.sidebar:
-    st.header("Your practice settings")
-    budget = st.number_input("Maximum amount (₹)", min_value=1, max_value=200, value=200, step=10)
-    risk_pct = st.slider("Maximum planned loss per trade (%)", 1, 5, 2)
-    watchlist_text = st.text_area("NSE symbols (one per line)", "IDEA\nYESBANK\nSUZLON\nNHPC\nIRFC\nIOC\nBANKBARODA\nPNB\nTATAPOWER\nONGC")
-    st.caption("Symbols are examples for screening only, not recommendations.")
-    run = st.button("Analyse watchlist", type="primary", use_container_width=True)
+# =================================
+# CURRENCY FORMAT
+# =================================
 
-st.warning("₹200 is a very small trading budget. Brokerage, STT, exchange charges, GST, stamp duty and bid–ask spread can consume a large part of any tiny gain. Do not use intraday leverage, F&O, margin or borrowed money. Consider paper trading first.")
+def rupee(value):
 
-now = datetime.now(ZoneInfo("Asia/Kolkata"))
-st.info(f"India time: {now:%d %b %Y, %I:%M:%S %p} · {market_session(now)} · NSE regular equity session is generally 9:15 AM–3:30 PM on trading days.")
+    try:
+        return f"₹{float(value):,.2f}"
 
-st.subheader("How to use this")
-st.markdown("""
-1. Run the scan before the market opens or after 9:30 AM.
-2. Review the data timestamp and the risk notes. Free Yahoo Finance data may be delayed or incomplete.
-3. Treat every result as a **watchlist idea**, not a buy instruction. Confirm the live quote and charges inside Groww.
-4. Start with paper trading. Never buy just because a score is high.
-""")
+    except (TypeError, ValueError):
 
-symbols = [x.strip().upper() for x in watchlist_text.splitlines() if x.strip()]
-if run or "results" not in st.session_state:
-    with st.spinner("Fetching public market data and calculating simple indicators..."):
-        rows = []
-        for symbol in symbols[:25]:
-            try:
-                rows.append(analyse_symbol(symbol, budget, risk_pct))
-            except Exception as e:
-                rows.append({"Symbol": symbol, "Status": f"Data unavailable: {str(e)[:90]}"})
-        st.session_state.results = rows
+        return "—"
 
-df = pd.DataFrame(st.session_state.results)
-if not df.empty:
-    st.subheader("Screening results")
-    if "Score" in df.columns:
-        df = df.sort_values("Score", ascending=False, na_position="last")
-    st.dataframe(df, use_container_width=True, hide_index=True)
-    valid = df[df.get("Status", pd.Series(index=df.index, dtype=str)).eq("Screened")].copy() if "Status" in df else pd.DataFrame()
-    if not valid.empty:
-        pick = st.selectbox("View chart", valid["Symbol"].tolist())
-        hist = yf.Ticker(f"{pick}.NS").history(period="3mo", interval="1d", auto_adjust=True)
-        if not hist.empty:
-            fig = go.Figure()
-            fig.add_trace(go.Candlestick(x=hist.index, open=hist["Open"], high=hist["High"], low=hist["Low"], close=hist["Close"], name=pick))
-            fig.update_layout(height=420, xaxis_rangeslider_visible=False, title=f"{pick} · 3-month daily candles")
-            st.plotly_chart(fig, use_container_width=True)
-        st.caption("Indicator scores are simple educational filters. They do not predict tomorrow's opening price or the best time to sell.")
 
-st.subheader("A sensible ₹200 beginner plan")
-st.markdown("""
-- Prefer **learning and paper trading** over frequent intraday trades.
-- With ₹200, only consider a whole-share cash purchase if the share price plus estimated costs fits your budget. Fractional shares are generally not available for Indian listed equities.
-- If the app says “No setup”, do nothing. Cash is a valid position.
-- There is no reliable universal sell time. Decide an exit before entering; a stop-loss can still slip or fail to execute at the intended price.
-- This app never places orders, never stores Groww credentials and never asks for an API token.
-""")
-st.caption("Data source: Yahoo Finance public endpoints via yfinance (not an official exchange feed). Verify all prices and order details in Groww before acting.")
+# =================================
+# NSE WATCHLIST
+# =================================
+
+def get_candidate_symbols(symbols=None, limit=30):
+
+    defaults = [
+        "NHPC",
+        "IRFC",
+        "IOC",
+        "ONGC",
+        "PNB",
+        "BANKBARODA",
+        "TATAPOWER",
+        "SUZLON",
+        "IDEA",
+        "YESBANK"
+    ]
+
+    values = defaults if symbols is None else symbols
+
+    cleaned = []
+
+    for item in values:
+
+        symbol = (
+            str(item)
+            .strip()
+            .upper()
+            .replace(".NS", "")
+        )
+
+        if symbol and symbol not in cleaned:
+
+            cleaned.append(symbol)
+
+    return cleaned[:max(1, int(limit))]
+
+
+# =================================
+# MARKET STATUS
+# =================================
+
+def market_session(now):
+
+    if now.weekday() >= 5:
+
+        return "Weekend — Market Closed"
+
+    india_time = now.astimezone(
+        ZoneInfo("Asia/Kolkata")
+    ).time()
+
+    if time(9, 0) <= india_time < time(9, 15):
+
+        return "Pre-Open Session"
+
+    if time(9, 15) <= india_time < time(15, 30):
+
+        return "Regular NSE Session"
+
+    return "Market Closed"
+
+
+# =================================
+# FETCH STOCK DATA
+# =================================
+
+def get_history(
+    symbol,
+    period="1y",
+    interval="1d"
+):
+
+    ticker = yf.Ticker(
+        f"{symbol}.NS"
+    )
+
+    data = ticker.history(
+        period=period,
+        interval=interval,
+        auto_adjust=True
+    )
+
+    if data.empty:
+
+        raise ValueError(
+            "No market data available. Check the NSE symbol."
+        )
+
+    return data.dropna(
+        subset=["Close"]
+    ).copy()
+
+
+# =================================
+# TECHNICAL INDICATORS
+# =================================
+
+def add_indicators(data):
+
+    df = data.copy()
+
+    close = df["Close"]
+
+    # Moving averages
+
+    df["SMA20"] = close.rolling(20).mean()
+
+    df["SMA50"] = close.rolling(50).mean()
+
+    # Exponential moving averages
+
+    df["EMA9"] = close.ewm(
+        span=9,
+        adjust=False
+    ).mean()
+
+    df["EMA21"] = close.ewm(
+        span=21,
+        adjust=False
+    ).mean()
+
+    # RSI
+
+    delta = close.diff()
+
+    gain = delta.clip(lower=0)
+
+    loss = -delta.clip(upper=0)
+
+    avg_gain = gain.ewm(
+        alpha=1 / 14,
+        adjust=False
+    ).mean()
+
+    avg_loss = loss.ewm(
+        alpha=1 / 14,
+        adjust=False
+    ).mean()
+
+    rs = avg_gain / avg_loss.replace(
+        0,
+        float("nan")
+    )
+
+    df["RSI"] = 100 - (
+        100 / (1 + rs)
+    )
+
+    # ATR
+
+    tr1 = df["High"] - df["Low"]
+
+    tr2 = (
+        df["High"] - df["Close"].shift()
+    ).abs()
+
+    tr3 = (
+        df["Low"] - df["Close"].shift()
+    ).abs()
+
+    true_range = pd.concat(
+        [tr1, tr2, tr3],
+        axis=1
+    ).max(axis=1)
+
+    df["ATR"] = true_range.rolling(14).mean()
+
+    # Volume
+
+    df["VolAvg20"] = (
+        df["Volume"].rolling(20).mean()
+    )
+
+    # Returns
+
+    df["Return20"] = (
+        close.pct_change(20) * 100
+    )
+
+    return df
+
+
+# =================================
+# STOCK ANALYSIS
+# =================================
+
+def analyse_symbol(
+    symbol,
+    budget,
+    risk_pct=2
+):
+
+    raw = get_history(
+        symbol,
+        "1y",
+        "1d"
+    )
+
+    df = add_indicators(raw)
+
+    df = df.dropna(
+        subset=["SMA20", "SMA50", "RSI", "ATR"]
+    )
+
+    if len(df) < 2:
+
+        raise ValueError(
+            "Insufficient historical data."
+        )
+
+    latest = df.iloc[-1]
+
+    price = float(latest["Close"])
+
+    rsi = float(latest["RSI"])
+
+    sma20 = float(latest["SMA20"])
+
+    sma50 = float(latest["SMA50"])
+
+    ema9 = float(latest["EMA9"])
+
+    ema21 = float(latest["EMA21"])
+
+    volume = float(latest["Volume"])
+
+    average_volume = float(
+        latest["VolAvg20"]
+    )
+
+    atr = float(latest["ATR"])
+
+    # Analysis conditions
+
+    checks = {
+
+        "Price above SMA20":
+            price > sma20,
+
+        "SMA20 above SMA50":
+            sma20 > sma50,
+
+        "EMA9 above EMA21":
+            ema9 > ema21,
+
+        "RSI between 45 and 65":
+            45 <= rsi <= 65,
+
+        "Volume above average":
+            volume > average_volume
+
+    }
+
+    score = sum(
+        checks.values()
+    )
+
+    # Budget calculation
+
+    quantity = int(
+        budget // price
+    )
+
+    investment = quantity * price
+
+    # Illustrative ATR levels
+
+    stop_loss = max(
+        0.01,
+        price - (1.5 * atr)
+    )
+
+    target = price + (2 * atr)
+
+    risk_per_share = (
+        price - stop_loss
+    )
+
+    total_risk = (
+        risk_per_share * quantity
+    )
+
+    # Result
+
+    if quantity < 1:
+
+        verdict = "SKIP — Stock exceeds budget"
+
+    elif rsi >= 72:
+
+        verdict = "AVOID CHASING — Momentum stretched"
+
+    elif score >= 4:
+
+        verdict = "WATCH — Conditions align"
+
+    else:
+
+        verdict = "NO CLEAR SETUP"
+
+    passed = ", ".join(
+        name
+        for name, value in checks.items()
+        if value
+    )
+
+    failed = ", ".join(
+        name
+        for name, value in checks.items()
+        if not value
+    )
+
+    return {
+
+        "Symbol": symbol,
+
+        "Latest Close (₹)": round(price, 2),
+
+        "Affordable Quantity": quantity,
+
+        "Investment Value (₹)": round(
+            investment,
+            2
+        ),
+
+        "RSI": round(rsi, 2),
+
+        "SMA20 (₹)": round(sma20, 2),
+
+        "SMA50 (₹)": round(sma50, 2),
+
+        "ATR (₹)": round(atr, 2),
+
+        "Score / 5": score,
+
+        "Screen result": verdict,
+
+        "Conditions Passed": passed,
+
+        "Conditions Failed": failed,
+
+        "Illustrative Stop (₹)": round(
+            stop_loss,
+            2
+        ),
+
+        "Illustrative Target (₹)": round(
+            target,
+            2
+        ),
+
+        "Estimated Position Risk (₹)": round(
+            total_risk,
+            2
+        ),
+
+        "Data Date": str(
+            df.index[-1].date()
+        )
+
+    }
+
+
+# =================================
+# OPENING CONFIRMATION
+# =================================
+
+def opening_check(
+    symbol,
+    budget
+):
+
+    df = get_history(
+        symbol,
+        "5d",
+        "5m"
+    )
+
+    if len(df) < 5:
+
+        raise ValueError(
+            "Insufficient intraday candles."
+        )
+
+    recent = df.tail(12)
+
+    typical_price = (
+        recent["High"]
+        + recent["Low"]
+        + recent["Close"]
+    ) / 3
+
+    volume = recent["Volume"].fillna(0)
+
+    if volume.sum() > 0:
+
+        vwap = float(
+            (typical_price * volume).sum()
+            / volume.sum()
+        )
+
+    else:
+
+        vwap = float(
+            typical_price.mean()
+        )
+
+    latest_price = float(
+        df["Close"].iloc[-1]
+    )
+
+    previous_price = float(
+        df["Close"].iloc[-2]
+    )
+
+    quantity = int(
+        budget // latest_price
+    )
+
+    above_vwap = (
+        latest_price > vwap
+    )
+
+    rising = (
+        latest_price > previous_price
+    )
+
+    if quantity < 1:
+
+        status = "SKIP — Unaffordable"
+
+    elif above_vwap and rising:
+
+        status = "WATCH ONLY — Conditions align"
+
+    else:
+
+        status = "WAIT — No confirmation"
+
+    return {
+
+        "Symbol": symbol,
+
+        "Latest 5m Price (₹)": round(
+            latest_price,
+            2
+        ),
+
+        "Approx VWAP (₹)": round(
+            vwap,
+            2
+        ),
+
+        "Above VWAP": above_vwap,
+
+        "Last Candle Rising": rising,
+
+        "Affordable Quantity": quantity,
+
+        "Status": status,
+
+        "Timestamp": str(
+            df.index[-1]
+        )
+
+    }
+
+
+# =================================
+# HISTORICAL BACKTEST
+# =================================
+
+def simple_backtest(
+    symbol,
+    period="2y"
+):
+
+    raw = get_history(
+        symbol,
+        period,
+        "1d"
+    )
+
+    df = add_indicators(raw)
+
+    df = df.dropna(
+        subset=["SMA20", "SMA50", "RSI"]
+    ).copy()
+
+    entry_signal = (
+
+        (df["Close"] > df["SMA50"])
+
+        & (df["EMA9"] > df["EMA21"])
+
+        & (df["RSI"] > 45)
+
+        & (df["RSI"] < 68)
+
+    )
+
+    exit_signal = (
+
+        (df["Close"] < df["SMA20"])
+
+        | (df["RSI"] > 75)
+
+    )
+
+    state = False
+
+    positions = []
+
+    # Use previous day's signal to avoid same-day signal execution.
+
+    entries = entry_signal.shift(1).fillna(False)
+
+    exits = exit_signal.shift(1).fillna(False)
+
+    for enter, exit_trade in zip(
+        entries,
+        exits
+    ):
+
+        if exit_trade:
+
+            state = False
+
+        elif enter:
+
+            state = True
+
+        positions.append(
+            1.0 if state else 0.0
+        )
+
+    position = pd.Series(
+        positions,
+        index=df.index
+    )
+
+    daily_returns = (
+        df["Close"].pct_change().fillna(0)
+    )
+
+    strategy_returns = (
+        position.shift(1).fillna(0)
+        * daily_returns
+    )
+
+    equity = (
+        1 + strategy_returns
+    ).cumprod()
+
+    peak = equity.cummax()
+
+    drawdown = (
+        equity / peak - 1
+    ) * 100
+
+    strategy_return = (
+        equity.iloc[-1] - 1
+    ) * 100
+
+    buy_hold_return = (
+
+        df["Close"].iloc[-1]
+        / df["Close"].iloc[0]
+        - 1
+
+    ) * 100
+
+    trades = int(
+        (position.diff() == 1).sum()
+    )
+
+    return {
+
+        "total_return": float(
+            strategy_return
+        ),
+
+        "buy_hold": float(
+            buy_hold_return
+        ),
+
+        "max_drawdown": float(
+            drawdown.min()
+        ),
+
+        "trades": trades,
+
+        "equity": equity,
+
+        "data": df
+
+    }
