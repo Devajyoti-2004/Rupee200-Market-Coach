@@ -4,3 +4,22 @@ services:
     runtime: python
     buildCommand: pip install -r requirements.txt
     startCommand: streamlit run app.py --server.port $PORT --server.address 0.0.0.0
+
+  - type: web
+    name: rupee200-telegram-bot
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn telegram_bot:app --bind 0.0.0.0:$PORT --workers 1 --timeout 120
+    envVars:
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: TELEGRAM_CHAT_ID
+        sync: false
+      - key: TELEGRAM_WEBHOOK_SECRET
+        sync: false
+      - key: TELEGRAM_WEBHOOK_URL
+        sync: false
+      - key: BUDGET
+        value: "200"
+      - key: WATCHLIST
+        value: "NHPC,IRFC,IOC,ONGC,PNB,BANKBARODA,TATAPOWER,SUZLON,IDEA,YESBANK"
