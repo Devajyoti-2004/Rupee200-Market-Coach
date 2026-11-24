@@ -2,12 +2,14 @@ services:
   - type: web
     name: rupee200-market-coach
     runtime: python
+    plan: free
     buildCommand: pip install -r requirements.txt
     startCommand: streamlit run app.py --server.port $PORT --server.address 0.0.0.0
 
   - type: web
     name: rupee200-telegram-bot
     runtime: python
+    plan: free
     buildCommand: pip install -r requirements.txt
     startCommand: gunicorn telegram_bot:app --bind 0.0.0.0:$PORT --workers 1 --timeout 120
     envVars:
